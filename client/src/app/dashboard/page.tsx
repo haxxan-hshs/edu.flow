@@ -5,12 +5,10 @@ import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import type { User } from "@supabase/supabase-js";
 import FileVault from "@/components/FileVault";
-import { saveUserActivity, getUserActivity, UserSubject } from "@/lib/schoolAdmin";
+import { saveUserActivity, getUserActivity, UserSubject, ReadingRecord as RR, UserCertificate } from "@/lib/schoolAdmin";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
-interface StudySession { id: string; title: string; duration: number; date: string; }
-interface Certificate { id: string; course: string; issuedAt: string; grade: string; }
-interface ReadingRecord { id: string; title: string; type: string; progress: number; lastRead: string; }
+interface StudySession { id: string; title: string; subjectId: string; duration: number; date: string; }
 type FileCategory = "All" | "PDF" | "Image" | "Document" | "Other";
 interface UploadedFile {
   id: string; name: string; size: string; sizeBytes: number;
@@ -63,13 +61,18 @@ export default function DashboardPage() {
   const uploadInputRef = useRef<HTMLInputElement>(null);
   // timer
   const [timerRunning, setTimerRunning] = useState(false); const [timerSeconds, setTimerSeconds] = useState(0);
-  const [timerTitle, setTimerTitle] = useState(""); const [sessions, setSessions] = useState<StudySession[]>([]);
+  const [timerTitle, setTimerTitle] = useState(""); const [timerSubjectId, setTimerSubjectId] = useState("");
+  const [sessions, setSessions] = useState<StudySession[]>([]);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   // subjects
   const [subjects, setSubjects] = useState<UserSubject[]>([]);
-  const [newSubjectName, setNewSubjectName] = useState("");
-  const [newSubjectHours, setNewSubjectHours] = useState("");
+  const [newSubjectName, setNewSubjectName] = useState(""); const [newSubjectHours, setNewSubjectHours] = useState("");
   const [subjectSaving, setSubjectSaving] = useState(false);
+  // reading records (user-managed courses)
+  const [readingRecords, setReadingRecords] = useState<RR[]>([]);
+  const [newCourseTitle, setNewCourseTitle] = useState(""); const [newCourseHours, setNewCourseHours] = useState("");
+  // certificates (admin-sent)
+  const [certificates, setCertificates] = useState<UserCertificate[]>([]);
   // files
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>(() => {
     if (typeof window !== "undefined") {
@@ -92,32 +95,23 @@ export default function DashboardPage() {
   // suppress unused var warnings — used in FileVault handlers
   void setFileFolder; void previewFile; void setPreviewFile; void renamingId; void setRenamingId; void renameValue; void setRenameValue; void newFolder; void setNewFolder; void showFolderInput; void setShowFolderInput;
   // mock data
-  const [certificates] = useState<Certificate[]>([
-    { id: "1", course: "Complete Python Bootcamp", issuedAt: "2025-03-15", grade: "A+" },
-    { id: "2", course: "React & Next.js Guide", issuedAt: "2025-04-20", grade: "A" },
-  ]);
-  const [readingHistory] = useState<ReadingRecord[]>([
-    { id: "1", title: "Complete Python Bootcamp", type: "Course", progress: 100, lastRead: "2025-05-10" },
-    { id: "2", title: "React & Next.js Guide", type: "Course", progress: 85, lastRead: "2025-05-15" },
-    { id: "3", title: "Machine Learning A-Z", type: "Course", progress: 42, lastRead: "2025-05-18" },
-    { id: "4", title: "UI/UX Design Masterclass", type: "Course", progress: 20, lastRead: "2025-05-19" },
-  ]);
-
   // ── Sync activity to admin-visible localStorage ──────────────────────────────
-  function syncActivity(overrides: { sessions?: StudySession[]; subjects?: UserSubject[]; files?: UploadedFile[] } = {}) {
+  function syncActivity(overrides: { sessions?: StudySession[]; subjects?: UserSubject[]; files?: UploadedFile[]; reading?: RR[]; certs?: UserCertificate[] } = {}) {
     if (!user) return;
     const sess = overrides.sessions ?? sessions;
     const subs = overrides.subjects ?? subjects;
     const files = overrides.files ?? uploadedFiles;
+    const reading = overrides.reading ?? readingRecords;
+    const certs = overrides.certs ?? certificates;
     saveUserActivity({
       email: user.email || "",
-      firstName,
-      lastName,
-      avatarUrl: avatarUrl || null,
+      firstName, lastName, avatarUrl: avatarUrl || null,
       subjects: subs,
-      studySessions: sess.map(s => ({ id: s.id, title: s.title, durationSeconds: s.duration, date: s.date })),
+      readingRecords: reading,
+      studySessions: sess.map(s => ({ id: s.id, title: s.title, subjectId: s.subjectId, durationSeconds: s.duration, date: s.date })),
       totalStudySeconds: sess.reduce((a, s) => a + s.duration, 0),
       filesCount: files.length,
+      certificates: certs,
       lastSeen: new Date().toISOString(),
     });
   }
@@ -129,9 +123,14 @@ export default function DashboardPage() {
       setUser(data.user);
       const m = data.user.user_metadata;
       setFirstName(m?.first_name || ""); setLastName(m?.last_name || ""); setAvatarUrl(m?.avatar_url || null);
-      // Load saved subjects from activity store
+      // Load all saved data from activity store
       const existing = getUserActivity(data.user.email || "");
-      if (existing) setSubjects(existing.subjects || []);
+      if (existing) {
+        setSubjects(existing.subjects || []);
+        setReadingRecords(existing.readingRecords || []);
+        setCertificates(existing.certificates || []);
+        setSessions((existing.studySessions || []).map(s => ({ id: s.id, title: s.title, subjectId: s.subjectId || "", duration: s.durationSeconds, date: s.date })));
+      }
       setLoading(false);
     });
   }, [router]);
@@ -140,24 +139,29 @@ export default function DashboardPage() {
     if (timerRef.current) clearInterval(timerRef.current);
     setTimerRunning(false);
     if (timerSeconds > 0) {
-      const newSession: StudySession = { id: Date.now().toString(), title: timerTitle || "Study Session", duration: timerSeconds, date: new Date().toLocaleDateString() };
-      setSessions(p => {
-        const updated = [newSession, ...p];
-        // sync to admin-visible store
-        if (user) saveUserActivity({
-          email: user.email || "",
-          firstName, lastName, avatarUrl: avatarUrl || null,
-          subjects,
-          studySessions: updated.map(s => ({ id: s.id, title: s.title, durationSeconds: s.duration, date: s.date })),
-          totalStudySeconds: updated.reduce((a, s) => a + s.duration, 0),
-          filesCount: uploadedFiles.length,
-          lastSeen: new Date().toISOString(),
+      const newSession: StudySession = { id: Date.now().toString(), title: timerTitle || "Study Session", subjectId: timerSubjectId, duration: timerSeconds, date: new Date().toLocaleDateString() };
+      // Update reading record studied seconds
+      setReadingRecords(prevRR => {
+        const updatedRR = timerSubjectId
+          ? prevRR.map(r => r.id === timerSubjectId ? { ...r, studiedSeconds: r.studiedSeconds + timerSeconds, lastStudied: new Date().toISOString() } : r)
+          : prevRR;
+        setSessions(prevSess => {
+          const updated = [newSession, ...prevSess];
+          if (user) saveUserActivity({
+            email: user.email || "", firstName, lastName, avatarUrl: avatarUrl || null,
+            subjects, readingRecords: updatedRR,
+            studySessions: updated.map(s => ({ id: s.id, title: s.title, subjectId: s.subjectId, durationSeconds: s.duration, date: s.date })),
+            totalStudySeconds: updated.reduce((a, s) => a + s.duration, 0),
+            filesCount: uploadedFiles.length, certificates,
+            lastSeen: new Date().toISOString(),
+          });
+          return updated;
         });
-        return updated;
+        return updatedRR;
       });
     }
-    setTimerSeconds(0); setTimerTitle("");
-  }, [timerSeconds, timerTitle, user, firstName, lastName, avatarUrl, subjects, uploadedFiles]);
+    setTimerSeconds(0); setTimerTitle(""); setTimerSubjectId("");
+  }, [timerSeconds, timerTitle, timerSubjectId, user, firstName, lastName, avatarUrl, subjects, uploadedFiles, certificates]);
 
   const startTimer = () => { setTimerRunning(true); timerRef.current = setInterval(() => setTimerSeconds(s => s + 1), 1000); };
   const pauseTimer = () => { if (timerRef.current) clearInterval(timerRef.current); setTimerRunning(false); };
@@ -358,10 +362,10 @@ export default function DashboardPage() {
               <p className="text-slate-500 text-sm mb-8">Here&apos;s your learning summary.</p>
               <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
                 {[
-                  { label: "Courses Viewed", value: readingHistory.length, icon: "📚", color: "text-indigo-600", bg: "bg-indigo-50" },
+                  { label: "My Courses", value: readingRecords.length, icon: "📚", color: "text-indigo-600", bg: "bg-indigo-50" },
                   { label: "Study Time", value: fmtShort(totalStudySeconds), icon: "⏱️", color: "text-purple-600", bg: "bg-purple-50" },
                   { label: "Certificates", value: certificates.length, icon: "🏆", color: "text-amber-600", bg: "bg-amber-50" },
-                  { label: "Files Uploaded", value: typeof window !== "undefined" ? JSON.parse(localStorage.getItem("eduflow_files") || "[]").length : 0, icon: "📁", color: "text-green-600", bg: "bg-green-50" },
+                  { label: "Files Uploaded", value: uploadedFiles.length, icon: "📁", color: "text-green-600", bg: "bg-green-50" },
                 ].map(s => (
                   <div key={s.label} className={`${s.bg} rounded-2xl p-5 text-center`}>
                     <div className="text-3xl mb-2">{s.icon}</div>
@@ -372,21 +376,26 @@ export default function DashboardPage() {
               </div>
               <div className="grid lg:grid-cols-2 gap-6">
                 <div className="bg-white rounded-2xl border border-slate-100 p-6 shadow-sm">
-                  <h2 className="font-bold text-slate-900 mb-4">📖 Recently Viewed</h2>
-                  <div className="space-y-3">
-                    {readingHistory.slice(0, 3).map(r => (
-                      <div key={r.id} className="flex items-center gap-3">
-                        <div className="w-10 h-10 bg-indigo-100 rounded-xl flex items-center justify-center text-lg flex-shrink-0">📚</div>
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-medium text-slate-900 truncate">{r.title}</p>
-                          <div className="flex items-center gap-2 mt-1">
-                            <div className="flex-1 bg-slate-100 rounded-full h-1.5"><div className="bg-indigo-500 h-1.5 rounded-full" style={{ width: `${r.progress}%` }} /></div>
-                            <span className="text-xs text-slate-400 flex-shrink-0">{r.progress}%</span>
+                  <h2 className="font-bold text-slate-900 mb-4">📖 My Courses Progress</h2>
+                  {readingRecords.length === 0
+                    ? <div className="text-center py-6"><p className="text-slate-400 text-sm">Koi course add nahi kiya.</p><button onClick={() => setActiveTab("history")} className="mt-2 text-xs text-indigo-600 font-semibold hover:underline">Course add karein →</button></div>
+                    : <div className="space-y-3">{readingRecords.slice(0, 3).map(r => {
+                        const pct = r.targetHours > 0 ? Math.min(100, Math.round((r.studiedSeconds / (r.targetHours * 3600)) * 100)) : 0;
+                        return (
+                          <div key={r.id} className="flex items-center gap-3">
+                            <div className="w-10 h-10 bg-indigo-100 rounded-xl flex items-center justify-center text-lg flex-shrink-0">📚</div>
+                            <div className="flex-1 min-w-0">
+                              <p className="text-sm font-medium text-slate-900 truncate">{r.title}</p>
+                              <div className="flex items-center gap-2 mt-1">
+                                <div className="flex-1 bg-slate-100 rounded-full h-1.5"><div className={`h-1.5 rounded-full ${pct >= 100 ? 'bg-green-500' : 'bg-indigo-500'}`} style={{ width: `${pct}%` }} /></div>
+                                <span className="text-xs text-slate-400 flex-shrink-0">{pct}%</span>
+                              </div>
+                            </div>
                           </div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
+                        );
+                      })}
+                    </div>
+                  }
                   <button onClick={() => setActiveTab("history")} className="mt-4 text-xs text-indigo-600 font-semibold hover:underline">View all →</button>
                 </div>
                 <div className="bg-white rounded-2xl border border-slate-100 p-6 shadow-sm">
@@ -441,7 +450,14 @@ export default function DashboardPage() {
               <h1 className="text-2xl font-extrabold text-slate-900 mb-1">Study Timer</h1>
               <p className="text-slate-500 text-sm mb-8">Track your study sessions and build a learning habit.</p>
               <div className="bg-gradient-to-br from-indigo-600 to-purple-700 rounded-2xl p-8 text-center text-white mb-6 shadow-xl">
-                <input type="text" value={timerTitle} onChange={e => setTimerTitle(e.target.value)} placeholder="What are you studying? (optional)" disabled={timerRunning} className="w-full bg-white/10 border border-white/20 text-white placeholder-white/50 text-center px-4 py-2 rounded-xl mb-8 focus:outline-none focus:ring-2 focus:ring-white/40 disabled:opacity-60 text-sm" />
+                <input type="text" value={timerTitle} onChange={e => setTimerTitle(e.target.value)} placeholder="Session ka naam (optional)" disabled={timerRunning} className="w-full bg-white/10 border border-white/20 text-white placeholder-white/50 text-center px-4 py-2 rounded-xl mb-3 focus:outline-none focus:ring-2 focus:ring-white/40 disabled:opacity-60 text-sm" />
+                {readingRecords.length > 0 && (
+                  <select value={timerSubjectId} onChange={e => setTimerSubjectId(e.target.value)} disabled={timerRunning}
+                    className="w-full bg-white/10 border border-white/20 text-white text-center px-4 py-2 rounded-xl mb-6 focus:outline-none focus:ring-2 focus:ring-white/40 disabled:opacity-60 text-sm">
+                    <option value="">-- Course select karein (optional) --</option>
+                    {readingRecords.map(r => <option key={r.id} value={r.id} className="text-slate-900">{r.title}</option>)}
+                  </select>
+                )}
                 <div className="font-mono text-7xl font-extrabold tracking-tight mb-8 tabular-nums">
                   {String(Math.floor(timerSeconds / 3600)).padStart(2, "0")}:{String(Math.floor((timerSeconds % 3600) / 60)).padStart(2, "0")}:{String(timerSeconds % 60).padStart(2, "0")}
                 </div>
@@ -482,65 +498,115 @@ export default function DashboardPage() {
             </div>
           )}
 
-          {/* HISTORY */}
+          {/* HISTORY — user-managed courses */}
           {activeTab === "history" && (
             <div>
               <div className="flex items-center justify-between mb-6">
-                <div><h1 className="text-2xl font-extrabold text-slate-900 mb-1">Reading History</h1><p className="text-slate-500 text-sm">All courses and materials you&apos;ve accessed.</p></div>
-                <button onClick={() => exportCSV(readingHistory.map(r => ({ Title: r.title, Type: r.type, Progress: r.progress + "%", LastRead: r.lastRead })), "reading-history.csv")} className="flex items-center gap-2 text-sm font-semibold text-indigo-600 bg-indigo-50 hover:bg-indigo-100 px-4 py-2 rounded-xl transition-colors"><svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>Export CSV</button>
+                <div><h1 className="text-2xl font-extrabold text-slate-900 mb-1">My Study Courses 📚</h1><p className="text-slate-500 text-sm">Apne courses add karein aur progress track karein.</p></div>
               </div>
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-8">
-                {[
-                  { label: "Total Viewed", value: readingHistory.length, color: "text-indigo-600", bg: "bg-indigo-50" },
-                  { label: "Completed", value: readingHistory.filter(r => r.progress === 100).length, color: "text-green-600", bg: "bg-green-50" },
-                  { label: "In Progress", value: readingHistory.filter(r => r.progress > 0 && r.progress < 100).length, color: "text-amber-600", bg: "bg-amber-50" },
-                  { label: "Avg Progress", value: Math.round(readingHistory.reduce((a, r) => a + r.progress, 0) / readingHistory.length) + "%", color: "text-purple-600", bg: "bg-purple-50" },
+              {/* Add course form */}
+              <form onSubmit={e => {
+                e.preventDefault();
+                if (!newCourseTitle.trim()) return;
+                const rec: RR = { id: Date.now().toString(), title: newCourseTitle.trim(), targetHours: Number(newCourseHours) || 0, studiedSeconds: 0, addedAt: new Date().toISOString(), lastStudied: null };
+                setReadingRecords(prev => { const updated = [rec, ...prev]; syncActivity({ reading: updated }); return updated; });
+                setNewCourseTitle(""); setNewCourseHours("");
+              }} className="bg-white rounded-2xl border border-slate-100 shadow-sm p-6 mb-6">
+                <h2 className="font-bold text-slate-900 mb-4">➕ Naya Course Add Karein</h2>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div className="sm:col-span-2">
+                    <label className="block text-sm font-medium text-slate-700 mb-1">Course / Subject Ka Naam</label>
+                    <input type="text" value={newCourseTitle} onChange={e => setNewCourseTitle(e.target.value)} placeholder="e.g. Python Programming, Calculus..." required className="w-full px-4 py-3 border border-slate-200 rounded-xl text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-400 text-sm" />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">Target Hours</label>
+                    <input type="number" value={newCourseHours} onChange={e => setNewCourseHours(e.target.value)} placeholder="e.g. 20" min="0" className="w-full px-4 py-3 border border-slate-200 rounded-xl text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-400 text-sm" />
+                  </div>
+                </div>
+                <button type="submit" className="mt-4 w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-xl transition-colors text-sm">Course Add Karein</button>
+              </form>
+              {/* Summary */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6">
+                {[{ label: "Total Courses", value: readingRecords.length, color: "text-indigo-600", bg: "bg-indigo-50" },
+                  { label: "Completed", value: readingRecords.filter(r => r.targetHours > 0 && r.studiedSeconds >= r.targetHours * 3600).length, color: "text-green-600", bg: "bg-green-50" },
+                  { label: "In Progress", value: readingRecords.filter(r => r.studiedSeconds > 0 && (r.targetHours === 0 || r.studiedSeconds < r.targetHours * 3600)).length, color: "text-amber-600", bg: "bg-amber-50" },
+                  { label: "Total Study", value: fmtShort(totalStudySeconds), color: "text-purple-600", bg: "bg-purple-50" },
                 ].map(s => <div key={s.label} className={`${s.bg} rounded-2xl p-4 text-center`}><p className={`text-2xl font-extrabold ${s.color}`}>{s.value}</p><p className="text-slate-500 text-xs mt-1">{s.label}</p></div>)}
               </div>
-              <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
-                <div className="grid grid-cols-12 gap-4 px-6 py-3 bg-slate-50 border-b border-slate-100 text-xs font-semibold text-slate-500 uppercase tracking-wider">
-                  <div className="col-span-5">Course</div><div className="col-span-2 text-center">Type</div><div className="col-span-3">Progress</div><div className="col-span-2 text-right">Last Accessed</div>
-                </div>
-                {readingHistory.map(r => (
-                  <div key={r.id} className="grid grid-cols-12 gap-4 px-6 py-4 border-b border-slate-50 last:border-0 items-center hover:bg-slate-50 transition-colors">
-                    <div className="col-span-5 flex items-center gap-3"><div className="w-9 h-9 bg-indigo-100 rounded-xl flex items-center justify-center text-lg flex-shrink-0">📚</div><span className="text-sm font-medium text-slate-900 truncate">{r.title}</span></div>
-                    <div className="col-span-2 text-center"><span className="text-xs bg-slate-100 text-slate-600 px-2 py-1 rounded-full">{r.type}</span></div>
-                    <div className="col-span-3"><div className="flex items-center gap-2"><div className="flex-1 bg-slate-100 rounded-full h-2"><div className={`h-2 rounded-full ${r.progress === 100 ? "bg-green-500" : "bg-indigo-500"}`} style={{ width: `${r.progress}%` }} /></div><span className={`text-xs font-semibold flex-shrink-0 ${r.progress === 100 ? "text-green-600" : "text-indigo-600"}`}>{r.progress}%</span></div></div>
-                    <div className="col-span-2 text-right text-xs text-slate-400">{r.lastRead}</div>
+              {/* Course list */}
+              {readingRecords.length === 0
+                ? <div className="bg-white rounded-2xl border border-slate-100 p-16 text-center"><div className="text-5xl mb-3">📚</div><p className="text-slate-400">Koi course add nahi kiya abhi tak.</p></div>
+                : <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+                    <div className="grid grid-cols-12 gap-2 px-6 py-3 bg-slate-50 border-b border-slate-100 text-xs font-semibold text-slate-500 uppercase tracking-wider">
+                      <div className="col-span-5">Course</div><div className="col-span-3">Progress</div><div className="col-span-2 text-center">Studied</div><div className="col-span-2 text-right">Action</div>
+                    </div>
+                    {readingRecords.map(r => {
+                      const pct = r.targetHours > 0 ? Math.min(100, Math.round((r.studiedSeconds / (r.targetHours * 3600)) * 100)) : 0;
+                      const done = r.targetHours > 0 && pct >= 100;
+                      return (
+                        <div key={r.id} className="grid grid-cols-12 gap-2 px-6 py-4 border-b border-slate-50 last:border-0 items-center hover:bg-slate-50 transition-colors">
+                          <div className="col-span-5 flex items-center gap-3">
+                            <div className="w-9 h-9 bg-indigo-100 rounded-xl flex items-center justify-center text-lg flex-shrink-0">📚</div>
+                            <div><p className="text-sm font-medium text-slate-900 truncate">{r.title}</p>
+                            {r.targetHours > 0 && <p className="text-xs text-slate-400">Target: {r.targetHours}h</p>}</div>
+                          </div>
+                          <div className="col-span-3">
+                            <div className="flex items-center gap-2">
+                              <div className="flex-1 bg-slate-100 rounded-full h-2"><div className={`h-2 rounded-full ${done ? 'bg-green-500' : 'bg-indigo-500'}`} style={{ width: `${pct}%` }} /></div>
+                              <span className={`text-xs font-semibold flex-shrink-0 ${done ? 'text-green-600' : 'text-indigo-600'}`}>{pct}%</span>
+                            </div>
+                          </div>
+                          <div className="col-span-2 text-center text-xs text-slate-500">{fmtShort(r.studiedSeconds)}</div>
+                          <div className="col-span-2 text-right">
+                            <button onClick={() => setReadingRecords(prev => { const u = prev.filter(x => x.id !== r.id); syncActivity({ reading: u }); return u; })} className="text-xs text-red-400 hover:text-red-600 bg-red-50 hover:bg-red-100 px-2 py-1 rounded-lg transition">🗑️</button>
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
-                ))}
+              }
+              <div className="mt-4 p-4 bg-blue-50 border border-blue-100 rounded-xl">
+                <p className="text-xs text-blue-600 font-medium">💡 Tip: Study Timer mein session start karte waqt course select karein — progress automatically update ho gi!</p>
               </div>
             </div>
           )}
 
-          {/* CERTIFICATES */}
+          {/* CERTIFICATES — admin-sent */}
           {activeTab === "certificates" && (
             <div>
-              <div className="flex items-center justify-between mb-6">
-                <div><h1 className="text-2xl font-extrabold text-slate-900 mb-1">My Certificates</h1><p className="text-slate-500 text-sm">Certificates earned by completing courses.</p></div>
-                {certificates.length > 0 && <button onClick={() => exportCSV(certificates.map(c => ({ Course: c.course, Grade: c.grade, IssuedAt: c.issuedAt })), "certificates.csv")} className="flex items-center gap-2 text-sm font-semibold text-indigo-600 bg-indigo-50 hover:bg-indigo-100 px-4 py-2 rounded-xl transition-colors"><svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>Export CSV</button>}
+              <div className="mb-6">
+                <h1 className="text-2xl font-extrabold text-slate-900 mb-1">Mere Certificates 🏆</h1>
+                <p className="text-slate-500 text-sm">School Admin ke bheje hue certificates — aapki mehnat ka saboot!</p>
               </div>
-              <div className="grid sm:grid-cols-2 gap-6">
-                {certificates.map(cert => (
-                  <div key={cert.id} className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
-                    <div className="bg-gradient-to-r from-indigo-600 to-purple-600 p-6 text-white text-center">
-                      <div className="text-4xl mb-2">🏆</div>
-                      <p className="text-xs font-semibold uppercase tracking-widest text-indigo-200 mb-1">Certificate of Completion</p>
-                      <h3 className="text-lg font-extrabold">{cert.course}</h3>
-                    </div>
-                    <div className="p-5">
-                      <div className="flex items-center justify-between mb-3">
-                        <div><p className="text-xs text-slate-400">Issued to</p><p className="font-bold text-slate-900">{firstName} {lastName}</p></div>
-                        <div className="text-right"><p className="text-xs text-slate-400">Grade</p><p className="font-extrabold text-green-600 text-lg">{cert.grade}</p></div>
+              {certificates.length === 0 ? (
+                <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-16 text-center">
+                  <div className="text-6xl mb-4">🏆</div>
+                  <h3 className="text-xl font-extrabold text-slate-900 mb-2">Koi Certificate Nahi Abhi Tak</h3>
+                  <p className="text-slate-400 text-sm max-w-sm mx-auto">Jab aap courses complete karein aur admin aapki progress se impressed ho — woh aapko certificate bhejenge. Mehnat karte rahein! 💪</p>
+                </div>
+              ) : (
+                <div className="grid sm:grid-cols-2 gap-6">
+                  {certificates.map(cert => (
+                    <div key={cert.id} className="bg-white rounded-2xl border-2 border-amber-200 shadow-lg overflow-hidden">
+                      <div className="bg-gradient-to-r from-amber-500 via-orange-500 to-red-500 p-6 text-white text-center relative">
+                        <div className="absolute inset-0 opacity-10" style={{ backgroundImage: 'repeating-linear-gradient(45deg, white 0, white 1px, transparent 0, transparent 50%)' }} />
+                        <div className="text-5xl mb-2">🏆</div>
+                        <p className="text-xs font-bold uppercase tracking-widest text-amber-100 mb-1">Certificate of Achievement</p>
+                        <h3 className="text-xl font-extrabold">{cert.courseTitle}</h3>
                       </div>
-                      <div className="flex items-center justify-between">
-                        <div><p className="text-xs text-slate-400">Date Issued</p><p className="text-sm font-medium text-slate-700">{cert.issuedAt}</p></div>
-                        <button className="flex items-center gap-1.5 text-xs font-semibold text-indigo-600 bg-indigo-50 hover:bg-indigo-100 px-3 py-2 rounded-lg transition-colors"><svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>Download</button>
+                      <div className="p-6">
+                        <div className="grid grid-cols-2 gap-4 mb-4">
+                          <div><p className="text-xs text-slate-400">Issued To</p><p className="font-bold text-slate-900">{firstName} {lastName}</p></div>
+                          <div className="text-right"><p className="text-xs text-slate-400">Grade</p><p className="font-extrabold text-green-600 text-2xl">{cert.grade}</p></div>
+                          <div><p className="text-xs text-slate-400">Issued By</p><p className="font-semibold text-slate-700 text-sm">{cert.issuedBy}</p></div>
+                          <div className="text-right"><p className="text-xs text-slate-400">Date</p><p className="text-sm font-medium text-slate-700">{new Date(cert.issuedAt).toLocaleDateString("en-PK")}</p></div>
+                        </div>
+                        {cert.message && <div className="bg-amber-50 border border-amber-100 rounded-xl p-3"><p className="text-xs text-amber-800 italic">&ldquo;{cert.message}&rdquo;</p></div>}
                       </div>
                     </div>
-                  </div>
-                ))}
-              </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
 

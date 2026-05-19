@@ -49,8 +49,29 @@ export interface UserSubject {
 export interface UserStudySession {
   id: string;
   title: string;
+  subjectId: string; // links to a ReadingRecord
   durationSeconds: number;
   date: string;
+}
+
+// User-managed reading/course records (replaces hardcoded data)
+export interface ReadingRecord {
+  id: string;
+  title: string;         // course/subject name
+  targetHours: number;   // how many hours user wants to study
+  studiedSeconds: number; // actual time tracked via timer
+  addedAt: string;
+  lastStudied: string | null;
+}
+
+// Certificates sent from admin to user
+export interface UserCertificate {
+  id: string;
+  courseTitle: string;
+  issuedBy: string;      // admin name
+  issuedAt: string;
+  grade: string;         // A+, A, B, etc.
+  message: string;       // personal message from admin
 }
 
 export interface UserActivityProfile {
@@ -59,9 +80,11 @@ export interface UserActivityProfile {
   lastName: string;
   avatarUrl: string | null;
   subjects: UserSubject[];
+  readingRecords: ReadingRecord[];  // user's self-added courses
   studySessions: UserStudySession[];
   totalStudySeconds: number;
   filesCount: number;
+  certificates: UserCertificate[];  // sent by admin
   lastSeen: string;
 }
 
@@ -80,6 +103,26 @@ export function saveUserActivity(profile: UserActivityProfile) {
 
 export function getUserActivity(email: string): UserActivityProfile | null {
   return getAllUserActivities().find(p => p.email === email) || null;
+}
+
+// Admin sends a certificate to a specific user
+export function adminSendCertificate(userEmail: string, cert: UserCertificate) {
+  const all = getAllUserActivities();
+  const idx = all.findIndex(p => p.email === userEmail);
+  if (idx < 0) return false;
+  all[idx].certificates = [cert, ...(all[idx].certificates || [])];
+  localStorage.setItem(ACTIVITY_KEY, JSON.stringify(all));
+  return true;
+}
+
+// Admin revokes a certificate
+export function adminRevokeCertificate(userEmail: string, certId: string) {
+  const all = getAllUserActivities();
+  const idx = all.findIndex(p => p.email === userEmail);
+  if (idx < 0) return false;
+  all[idx].certificates = (all[idx].certificates || []).filter(c => c.id !== certId);
+  localStorage.setItem(ACTIVITY_KEY, JSON.stringify(all));
+  return true;
 }
 
 // No demo data — admin adds everything manually
