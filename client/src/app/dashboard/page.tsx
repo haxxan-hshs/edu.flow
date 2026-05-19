@@ -5,6 +5,7 @@ import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import type { User } from "@supabase/supabase-js";
 import FileVault from "@/components/FileVault";
+import { saveUserActivity, getUserActivity, UserSubject } from "@/lib/schoolAdmin";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 interface StudySession { id: string; title: string; duration: number; date: string; }
@@ -16,7 +17,7 @@ interface UploadedFile {
   type: string; category: FileCategory; uploadedAt: string;
   dataUrl: string; folder: string; note: string;
 }
-type Tab = "overview" | "profile" | "timer" | "history" | "certificates" | "files";
+type Tab = "overview" | "profile" | "timer" | "history" | "certificates" | "files" | "subjects";
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 function fmt(s: number) {
@@ -64,6 +65,11 @@ export default function DashboardPage() {
   const [timerRunning, setTimerRunning] = useState(false); const [timerSeconds, setTimerSeconds] = useState(0);
   const [timerTitle, setTimerTitle] = useState(""); const [sessions, setSessions] = useState<StudySession[]>([]);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // subjects
+  const [subjects, setSubjects] = useState<UserSubject[]>([]);
+  const [newSubjectName, setNewSubjectName] = useState("");
+  const [newSubjectHours, setNewSubjectHours] = useState("");
+  const [subjectSaving, setSubjectSaving] = useState(false);
   // files
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>(() => {
     if (typeof window !== "undefined") {
@@ -97,6 +103,25 @@ export default function DashboardPage() {
     { id: "4", title: "UI/UX Design Masterclass", type: "Course", progress: 20, lastRead: "2025-05-19" },
   ]);
 
+  // ── Sync activity to admin-visible localStorage ──────────────────────────────
+  function syncActivity(overrides: { sessions?: StudySession[]; subjects?: UserSubject[]; files?: UploadedFile[] } = {}) {
+    if (!user) return;
+    const sess = overrides.sessions ?? sessions;
+    const subs = overrides.subjects ?? subjects;
+    const files = overrides.files ?? uploadedFiles;
+    saveUserActivity({
+      email: user.email || "",
+      firstName,
+      lastName,
+      avatarUrl: avatarUrl || null,
+      subjects: subs,
+      studySessions: sess.map(s => ({ id: s.id, title: s.title, durationSeconds: s.duration, date: s.date })),
+      totalStudySeconds: sess.reduce((a, s) => a + s.duration, 0),
+      filesCount: files.length,
+      lastSeen: new Date().toISOString(),
+    });
+  }
+
   useEffect(() => {
     const supabase = createClient();
     supabase.auth.getUser().then(({ data }) => {
@@ -104,6 +129,9 @@ export default function DashboardPage() {
       setUser(data.user);
       const m = data.user.user_metadata;
       setFirstName(m?.first_name || ""); setLastName(m?.last_name || ""); setAvatarUrl(m?.avatar_url || null);
+      // Load saved subjects from activity store
+      const existing = getUserActivity(data.user.email || "");
+      if (existing) setSubjects(existing.subjects || []);
       setLoading(false);
     });
   }, [router]);
@@ -111,9 +139,25 @@ export default function DashboardPage() {
   const stopTimer = useCallback(() => {
     if (timerRef.current) clearInterval(timerRef.current);
     setTimerRunning(false);
-    if (timerSeconds > 0) setSessions(p => [{ id: Date.now().toString(), title: timerTitle || "Study Session", duration: timerSeconds, date: new Date().toLocaleDateString() }, ...p]);
+    if (timerSeconds > 0) {
+      const newSession: StudySession = { id: Date.now().toString(), title: timerTitle || "Study Session", duration: timerSeconds, date: new Date().toLocaleDateString() };
+      setSessions(p => {
+        const updated = [newSession, ...p];
+        // sync to admin-visible store
+        if (user) saveUserActivity({
+          email: user.email || "",
+          firstName, lastName, avatarUrl: avatarUrl || null,
+          subjects,
+          studySessions: updated.map(s => ({ id: s.id, title: s.title, durationSeconds: s.duration, date: s.date })),
+          totalStudySeconds: updated.reduce((a, s) => a + s.duration, 0),
+          filesCount: uploadedFiles.length,
+          lastSeen: new Date().toISOString(),
+        });
+        return updated;
+      });
+    }
     setTimerSeconds(0); setTimerTitle("");
-  }, [timerSeconds, timerTitle]);
+  }, [timerSeconds, timerTitle, user, firstName, lastName, avatarUrl, subjects, uploadedFiles]);
 
   const startTimer = () => { setTimerRunning(true); timerRef.current = setInterval(() => setTimerSeconds(s => s + 1), 1000); };
   const pauseTimer = () => { if (timerRef.current) clearInterval(timerRef.current); setTimerRunning(false); };
@@ -226,9 +270,33 @@ export default function DashboardPage() {
     </div>
   );
 
+  // Add subject and sync
+  function handleAddSubject(e: React.FormEvent) {
+    e.preventDefault();
+    if (!newSubjectName.trim()) return;
+    setSubjectSaving(true);
+    const sub: UserSubject = { id: Date.now().toString(), name: newSubjectName.trim(), hoursPerWeek: Number(newSubjectHours) || 0, addedAt: new Date().toISOString() };
+    setSubjects(prev => {
+      const updated = [sub, ...prev];
+      syncActivity({ subjects: updated });
+      return updated;
+    });
+    setNewSubjectName(""); setNewSubjectHours("");
+    setTimeout(() => setSubjectSaving(false), 500);
+  }
+
+  function handleDeleteSubject(id: string) {
+    setSubjects(prev => {
+      const updated = prev.filter(s => s.id !== id);
+      syncActivity({ subjects: updated });
+      return updated;
+    });
+  }
+
   const navItems: { icon: React.ReactNode; label: string; tab: Tab }[] = [
     { tab: "overview", label: "Overview", icon: <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" /></svg> },
     { tab: "profile", label: "My Profile", icon: <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" /></svg> },
+    { tab: "subjects", label: "My Subjects", icon: <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" /></svg> },
     { tab: "timer", label: "Study Timer", icon: <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg> },
     { tab: "history", label: "Reading History", icon: <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" /></svg> },
     { tab: "certificates", label: "Certificates", icon: <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4M7.835 4.697a3.42 3.42 0 001.946-.806 3.42 3.42 0 014.438 0 3.42 3.42 0 001.946.806 3.42 3.42 0 013.138 3.138 3.42 3.42 0 00.806 1.946 3.42 3.42 0 010 4.438 3.42 3.42 0 00-.806 1.946 3.42 3.42 0 01-3.138 3.138 3.42 3.42 0 00-1.946.806 3.42 3.42 0 01-4.438 0 3.42 3.42 0 00-1.946-.806 3.42 3.42 0 01-3.138-3.138 3.42 3.42 0 00-.806-1.946 3.42 3.42 0 010-4.438 3.42 3.42 0 00.806-1.946 3.42 3.42 0 013.138-3.138z" /></svg> },
@@ -472,6 +540,57 @@ export default function DashboardPage() {
                     </div>
                   </div>
                 ))}
+              </div>
+            </div>
+          )}
+
+          {/* SUBJECTS */}
+          {activeTab === "subjects" && (
+            <div className="max-w-2xl">
+              <h1 className="text-2xl font-extrabold text-slate-900 mb-1">My Subjects 📚</h1>
+              <p className="text-slate-500 text-sm mb-8">Apne subjects add karein — yeh admin panel mein nazar aayenge.</p>
+              <form onSubmit={handleAddSubject} className="bg-white rounded-2xl border border-slate-100 shadow-sm p-6 mb-6">
+                <h2 className="font-bold text-slate-900 mb-4">➕ Naya Subject Add Karein</h2>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div className="sm:col-span-2">
+                    <label className="block text-sm font-medium text-slate-700 mb-1">Subject Ka Naam</label>
+                    <input type="text" value={newSubjectName} onChange={e => setNewSubjectName(e.target.value)}
+                      placeholder="e.g. Mathematics, Physics..." required
+                      className="w-full px-4 py-3 border border-slate-200 rounded-xl text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:border-transparent text-sm" />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">Hours/Week</label>
+                    <input type="number" value={newSubjectHours} onChange={e => setNewSubjectHours(e.target.value)}
+                      placeholder="0" min="0" max="40"
+                      className="w-full px-4 py-3 border border-slate-200 rounded-xl text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:border-transparent text-sm" />
+                  </div>
+                </div>
+                <button type="submit" disabled={subjectSaving} className="mt-4 w-full py-3 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white font-semibold rounded-xl transition-colors text-sm">
+                  {subjectSaving ? "Saving..." : "Subject Add Karein"}
+                </button>
+              </form>
+              <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-6">
+                <h2 className="font-bold text-slate-900 mb-4">Mere Subjects ({subjects.length})</h2>
+                {subjects.length === 0
+                  ? <div className="text-center py-10"><div className="text-4xl mb-3">📭</div><p className="text-slate-400 text-sm">Koi subject add nahi kiya abhi tak.</p></div>
+                  : <div className="space-y-2">
+                      {subjects.map(s => (
+                        <div key={s.id} className="flex items-center justify-between p-4 bg-indigo-50 rounded-xl border border-indigo-100">
+                          <div className="flex items-center gap-3">
+                            <div className="w-9 h-9 rounded-xl bg-indigo-100 flex items-center justify-center text-indigo-600 text-lg">📖</div>
+                            <div>
+                              <p className="font-semibold text-slate-900 text-sm">{s.name}</p>
+                              {s.hoursPerWeek > 0 && <p className="text-xs text-slate-400">{s.hoursPerWeek} hours/week</p>}
+                            </div>
+                          </div>
+                          <button onClick={() => handleDeleteSubject(s.id)} className="text-red-400 hover:text-red-600 transition text-xs bg-red-50 hover:bg-red-100 px-3 py-1.5 rounded-lg">🗑️ Remove</button>
+                        </div>
+                      ))}
+                    </div>
+                }
+              </div>
+              <div className="mt-4 p-4 bg-indigo-50 border border-indigo-100 rounded-xl">
+                <p className="text-xs text-indigo-600 font-medium">💡 Aapke subjects, study sessions aur profile automatically School Admin ko nazar aate hain.</p>
               </div>
             </div>
           )}

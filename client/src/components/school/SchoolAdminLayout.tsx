@@ -10,6 +10,7 @@ const navItems = [
   { href: "/school-admin/marks", label: "Marks", icon: "📝" },
   { href: "/school-admin/announcements", label: "Announcements", icon: "📢" },
   { href: "/school-admin/reports", label: "Reports", icon: "📊" },
+  { href: "/school-admin/user-activity", label: "User Activity", icon: "📡" },
 ];
 
 export default function SchoolAdminLayout({ children }: { children: React.ReactNode }) {

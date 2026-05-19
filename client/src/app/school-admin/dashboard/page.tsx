@@ -2,7 +2,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import SchoolAdminLayout from "@/components/school/SchoolAdminLayout";
-import { seedData, getStudents, getAttendance, getMarks, getAnnouncements } from "@/lib/schoolAdmin";
+import { seedData, getStudents, getAttendance, getMarks, getAnnouncements, getAllUserActivities, UserActivityProfile } from "@/lib/schoolAdmin";
 
 export default function SchoolDashboard() {
   const router = useRouter();
@@ -10,6 +10,7 @@ export default function SchoolDashboard() {
   const [stats, setStats] = useState({ students: 0, present: 0, absent: 0, avgMarks: 0, announcements: 0 });
   const [recentStudents, setRecentStudents] = useState<{ name: string; class: string; rollNo: string; status: string }[]>([]);
   const [todayAttendance, setTodayAttendance] = useState<{ name: string; status: string }[]>([]);
+  const [userActivities, setUserActivities] = useState<UserActivityProfile[]>([]);
 
   useEffect(() => {
     if (!localStorage.getItem("school_admin_auth")) { router.push("/school-admin"); return; }
@@ -31,6 +32,7 @@ export default function SchoolDashboard() {
       name: students.find(s => s.id === a.studentId)?.name || "Unknown",
       status: a.status,
     })));
+    setUserActivities(getAllUserActivities());
     setReady(true);
   }, [router]);
 
@@ -80,6 +82,7 @@ export default function SchoolDashboard() {
           <div className="bg-slate-900 border border-white/5 rounded-2xl p-6">
             <h2 className="font-bold text-white mb-4 flex items-center gap-2">👨‍🎓 Recent Students</h2>
             <div className="space-y-3">
+              {recentStudents.length === 0 && <p className="text-slate-500 text-sm">Koi student add nahi kiya gaya abhi tak.</p>}
               {recentStudents.map((s, i) => (
                 <div key={i} className="flex items-center justify-between py-2 border-b border-white/5 last:border-0">
                   <div className="flex items-center gap-3">
@@ -108,6 +111,56 @@ export default function SchoolDashboard() {
               ))}
             </div>
           </div>
+        </div>
+
+        {/* Live User Activity */}
+        <div className="bg-slate-900 border border-white/5 rounded-2xl p-6">
+          <div className="flex items-center justify-between mb-5">
+            <h2 className="font-bold text-white flex items-center gap-2">📡 Live User Activity</h2>
+            <span className="text-xs bg-indigo-500/20 text-indigo-400 border border-indigo-500/30 px-2 py-1 rounded-full">{userActivities.length} users</span>
+          </div>
+          {userActivities.length === 0 ? (
+            <div className="text-center py-8">
+              <div className="text-4xl mb-3">📭</div>
+              <p className="text-slate-500 text-sm">Koi user activity nahi mili abhi tak.</p>
+              <p className="text-slate-600 text-xs mt-1">Jab users dashboard par login kar ke subjects/study sessions add karenge — yahan nazar aayenge.</p>
+            </div>
+          ) : (
+            <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
+              {userActivities.slice(0, 6).map(u => (
+                <div key={u.email} className="bg-slate-800/60 rounded-xl p-4 border border-white/5">
+                  <div className="flex items-center gap-3 mb-3">
+                    <div className="w-9 h-9 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white font-bold text-sm flex-shrink-0 overflow-hidden">
+                      {u.avatarUrl ? <img src={u.avatarUrl} alt="" className="w-full h-full object-cover" /> : (u.firstName?.[0] || u.email[0]).toUpperCase()}
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-white font-semibold text-sm truncate">{u.firstName} {u.lastName}</p>
+                      <p className="text-slate-400 text-xs truncate">{u.email}</p>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-3 gap-1.5 text-center">
+                    <div className="bg-slate-900 rounded-lg py-1.5">
+                      <p className="text-indigo-400 font-bold text-xs">{u.subjects.length}</p>
+                      <p className="text-slate-600 text-xs">Subjects</p>
+                    </div>
+                    <div className="bg-slate-900 rounded-lg py-1.5">
+                      <p className="text-purple-400 font-bold text-xs">{u.studySessions.length}</p>
+                      <p className="text-slate-600 text-xs">Sessions</p>
+                    </div>
+                    <div className="bg-slate-900 rounded-lg py-1.5">
+                      <p className="text-amber-400 font-bold text-xs">{u.filesCount}</p>
+                      <p className="text-slate-600 text-xs">Files</p>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+          {userActivities.length > 0 && (
+            <a href="/school-admin/user-activity" className="mt-4 flex items-center justify-center gap-2 text-xs text-indigo-400 hover:text-indigo-300 font-semibold transition">
+              Tamam users dekho → 
+            </a>
+          )}
         </div>
       </div>
     </SchoolAdminLayout>

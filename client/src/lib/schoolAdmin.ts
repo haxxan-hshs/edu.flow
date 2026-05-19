@@ -38,6 +38,50 @@ export interface Announcement {
   priority: "low" | "medium" | "high";
 }
 
+// ── User Activity Bridge (user dashboard → admin panel) ─────────────────────
+export interface UserSubject {
+  id: string;
+  name: string;
+  hoursPerWeek: number;
+  addedAt: string;
+}
+
+export interface UserStudySession {
+  id: string;
+  title: string;
+  durationSeconds: number;
+  date: string;
+}
+
+export interface UserActivityProfile {
+  email: string;
+  firstName: string;
+  lastName: string;
+  avatarUrl: string | null;
+  subjects: UserSubject[];
+  studySessions: UserStudySession[];
+  totalStudySeconds: number;
+  filesCount: number;
+  lastSeen: string;
+}
+
+const ACTIVITY_KEY = "eduflow_user_activities";
+
+export function getAllUserActivities(): UserActivityProfile[] {
+  try { return JSON.parse(localStorage.getItem(ACTIVITY_KEY) || "[]"); } catch { return []; }
+}
+
+export function saveUserActivity(profile: UserActivityProfile) {
+  const all = getAllUserActivities();
+  const idx = all.findIndex(p => p.email === profile.email);
+  if (idx >= 0) all[idx] = profile; else all.unshift(profile);
+  localStorage.setItem(ACTIVITY_KEY, JSON.stringify(all));
+}
+
+export function getUserActivity(email: string): UserActivityProfile | null {
+  return getAllUserActivities().find(p => p.email === email) || null;
+}
+
 // No demo data — admin adds everything manually
 export function seedData() {
   // intentionally empty
