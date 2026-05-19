@@ -25,20 +25,22 @@ export default function CertificatesPage() {
 
   useEffect(() => {
     if (!localStorage.getItem("school_admin_auth")) { router.push("/school-admin"); return; }
-    setUsers(getAllUserActivities());
-    setReady(true);
+    (async () => {
+      setUsers(await getAllUserActivities());
+      setReady(true);
+    })();
   }, [router]);
 
-  function refresh() { const all = getAllUserActivities(); setUsers(all); if (selected) setSelected(all.find(u => u.email === selected.email) || null); }
+  async function refresh() { const all = await getAllUserActivities(); setUsers(all); if (selected) setSelected(all.find(u => u.email === selected.email) || null); }
 
   function openCertModal(u: UserActivityProfile) { setSelected(u); setForm({ courseTitle: "", grade: "A", message: "" }); setModal(true); }
 
-  function handleSend(e: React.FormEvent) {
+  async function handleSend(e: React.FormEvent) {
     e.preventDefault();
     if (!selected || !form.courseTitle.trim()) return;
     setSending(true);
     const cert: UserCertificate = { id: "cert_" + Date.now(), courseTitle: form.courseTitle.trim(), issuedBy: "School Admin", issuedAt: new Date().toISOString(), grade: form.grade, message: form.message.trim() };
-    const ok = adminSendCertificate(selected.email, cert);
+    const ok = await adminSendCertificate(selected.email, cert);
     setTimeout(() => {
       setSending(false);
       setModal(false);
@@ -48,8 +50,8 @@ export default function CertificatesPage() {
     }, 600);
   }
 
-  function handleRevoke(userEmail: string, certId: string) {
-    adminRevokeCertificate(userEmail, certId);
+  async function handleRevoke(userEmail: string, certId: string) {
+    await adminRevokeCertificate(userEmail, certId);
     refresh();
     setToast("Certificate revoke ho gaya.");
     setTimeout(() => setToast(null), 2500);

@@ -14,26 +14,28 @@ export default function SchoolDashboard() {
 
   useEffect(() => {
     if (!localStorage.getItem("school_admin_auth")) { router.push("/school-admin"); return; }
-    seedData();
-    const students = getStudents();
-    const today = new Date().toISOString().split("T")[0];
-    const att = getAttendance().filter(a => a.date === today);
-    const marks = getMarks();
-    const avgMarks = marks.length ? Math.round(marks.reduce((s, m) => s + (m.marks / m.totalMarks) * 100, 0) / marks.length) : 0;
-    setStats({
-      students: students.length,
-      present: att.filter(a => a.status === "present").length,
-      absent: att.filter(a => a.status === "absent").length,
-      avgMarks,
-      announcements: getAnnouncements().length,
-    });
-    setRecentStudents(students.slice(0, 5).map(s => ({ name: s.name, class: s.class + "-" + s.section, rollNo: s.rollNo, status: s.status })));
-    setTodayAttendance(att.slice(0, 5).map(a => ({
-      name: students.find(s => s.id === a.studentId)?.name || "Unknown",
-      status: a.status,
-    })));
-    setUserActivities(getAllUserActivities());
-    setReady(true);
+    (async () => {
+      seedData();
+      const students = getStudents();
+      const today = new Date().toISOString().split("T")[0];
+      const att = getAttendance().filter(a => a.date === today);
+      const marks = getMarks();
+      const avgMarks = marks.length ? Math.round(marks.reduce((s, m) => s + (m.marks / m.totalMarks) * 100, 0) / marks.length) : 0;
+      setStats({
+        students: students.length,
+        present: att.filter(a => a.status === "present").length,
+        absent: att.filter(a => a.status === "absent").length,
+        avgMarks,
+        announcements: getAnnouncements().length,
+      });
+      setRecentStudents(students.slice(0, 5).map(s => ({ name: s.name, class: s.class + "-" + s.section, rollNo: s.rollNo, status: s.status })));
+      setTodayAttendance(att.slice(0, 5).map(a => ({
+        name: students.find(s => s.id === a.studentId)?.name || "Unknown",
+        status: a.status,
+      })));
+      setUserActivities(await getAllUserActivities());
+      setReady(true);
+    })();
   }, [router]);
 
   if (!ready) return (

@@ -88,40 +88,90 @@ export interface UserActivityProfile {
   lastSeen: string;
 }
 
-const ACTIVITY_KEY = "eduflow_user_activities";
+import { createClient } from "./supabase/client";
 
-export function getAllUserActivities(): UserActivityProfile[] {
-  try { return JSON.parse(localStorage.getItem(ACTIVITY_KEY) || "[]"); } catch { return []; }
+export async function getAllUserActivities(): Promise<UserActivityProfile[]> {
+  const supabase = createClient();
+  const { data, error } = await supabase.from("user_activities").select("*");
+  if (error || !data) return [];
+  return data.map(d => ({
+    email: d.email,
+    firstName: d.first_name,
+    lastName: d.last_name,
+    avatarUrl: d.avatar_url,
+    subjects: d.subjects || [],
+    readingRecords: d.reading_records || [],
+    studySessions: d.study_sessions || [],
+    totalStudySeconds: d.total_study_seconds || 0,
+    filesCount: d.files_count || 0,
+    certificates: d.certificates || [],
+    lastSeen: d.last_seen,
+  }));
 }
 
-export function saveUserActivity(profile: UserActivityProfile) {
-  const all = getAllUserActivities();
-  const idx = all.findIndex(p => p.email === profile.email);
-  if (idx >= 0) all[idx] = profile; else all.unshift(profile);
-  localStorage.setItem(ACTIVITY_KEY, JSON.stringify(all));
+export async function saveUserActivity(profile: UserActivityProfile) {
+  const supabase = createClient();
+  const { error } = await supabase
+    .from("user_activities")
+    .upsert({
+      email: profile.email,
+      first_name: profile.firstName,
+      last_name: profile.lastName,
+      avatar_url: profile.avatarUrl,
+      subjects: profile.subjects,
+      reading_records: profile.readingRecords,
+      study_sessions: profile.studySessions,
+      total_study_seconds: profile.totalStudySeconds,
+      files_count: profile.filesCount,
+      certificates: profile.certificates,
+      last_seen: profile.lastSeen,
+    });
+  
+  if (error) {
+    console.error("Error saving to Supabase:", error);
+  }
 }
 
-export function getUserActivity(email: string): UserActivityProfile | null {
-  return getAllUserActivities().find(p => p.email === email) || null;
+export async function getUserActivity(email: string): Promise<UserActivityProfile | null> {
+  const supabase = createClient();
+  const { data, error } = await supabase
+    .from("user_activities")
+    .select("*")
+    .eq("email", email)
+    .single();
+
+  if (error || !data) return null;
+
+  return {
+    email: data.email,
+    firstName: data.first_name,
+    lastName: data.last_name,
+    avatarUrl: data.avatar_url,
+    subjects: data.subjects || [],
+    readingRecords: data.reading_records || [],
+    studySessions: data.study_sessions || [],
+    totalStudySeconds: data.total_study_seconds || 0,
+    filesCount: data.files_count || 0,
+    certificates: data.certificates || [],
+    lastSeen: data.last_seen,
+  };
 }
 
 // Admin sends a certificate to a specific user
-export function adminSendCertificate(userEmail: string, cert: UserCertificate) {
-  const all = getAllUserActivities();
-  const idx = all.findIndex(p => p.email === userEmail);
-  if (idx < 0) return false;
-  all[idx].certificates = [cert, ...(all[idx].certificates || [])];
-  localStorage.setItem(ACTIVITY_KEY, JSON.stringify(all));
+export async function adminSendCertificate(userEmail: string, cert: UserCertificate) {
+  const profile = await getUserActivity(userEmail);
+  if (!profile) return false;
+  profile.certificates = [cert, ...(profile.certificates || [])];
+  await saveUserActivity(profile);
   return true;
 }
 
 // Admin revokes a certificate
-export function adminRevokeCertificate(userEmail: string, certId: string) {
-  const all = getAllUserActivities();
-  const idx = all.findIndex(p => p.email === userEmail);
-  if (idx < 0) return false;
-  all[idx].certificates = (all[idx].certificates || []).filter(c => c.id !== certId);
-  localStorage.setItem(ACTIVITY_KEY, JSON.stringify(all));
+export async function adminRevokeCertificate(userEmail: string, certId: string) {
+  const profile = await getUserActivity(userEmail);
+  if (!profile) return false;
+  profile.certificates = (profile.certificates || []).filter(c => c.id !== certId);
+  await saveUserActivity(profile);
   return true;
 }
 

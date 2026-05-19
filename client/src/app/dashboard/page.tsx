@@ -118,13 +118,13 @@ export default function DashboardPage() {
 
   useEffect(() => {
     const supabase = createClient();
-    supabase.auth.getUser().then(({ data }) => {
+    supabase.auth.getUser().then(async ({ data }) => {
       if (!data.user) { router.push("/login"); return; }
       setUser(data.user);
       const m = data.user.user_metadata;
       setFirstName(m?.first_name || ""); setLastName(m?.last_name || ""); setAvatarUrl(m?.avatar_url || null);
       // Load all saved data from activity store
-      const existing = getUserActivity(data.user.email || "");
+      const existing = await getUserActivity(data.user.email || "");
       if (existing) {
         setSubjects(existing.subjects || []);
         setReadingRecords(existing.readingRecords || []);

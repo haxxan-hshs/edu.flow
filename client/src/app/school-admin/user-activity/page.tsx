@@ -20,11 +20,13 @@ export default function UserActivityPage() {
 
   useEffect(() => {
     if (!localStorage.getItem("school_admin_auth")) { router.push("/school-admin"); return; }
-    setUsers(getAllUserActivities());
-    setReady(true);
+    (async () => {
+      setUsers(await getAllUserActivities());
+      setReady(true);
+    })();
   }, [router]);
 
-  function refresh() { setUsers(getAllUserActivities()); }
+  async function refresh() { setUsers(await getAllUserActivities()); }
 
   const filtered = users.filter(u =>
     u.email.toLowerCase().includes(search.toLowerCase()) ||
